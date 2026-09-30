@@ -1,0 +1,14 @@
+{
+  "name": "Life Aware",
+  "short_name": "Life Aware",
+  "description": "Health tracking and budget management in one private app, with trends, reports and over-budget alerts.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#fdf8f1",
+  "theme_color": "#e3eefc",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

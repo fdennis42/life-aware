@@ -418,7 +418,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
   </div>
   <div class="card">
     <h2>Data</h2>
-    <button class="btn block" id="btn-import-ha">Import from Health Aware</button>
+    <button class="btn block" id="btn-import-ha" data-importha>Import from Health Aware</button>
     <div class="muted" style="margin:6px 0 12px">Copies your health entries and settings from the Health Aware app (same sign-in). Nothing is removed from Health Aware.</div>
     <button class="btn danger block" id="btn-sample">Load sample data (to try it out)</button>
     <button class="btn danger block" id="btn-wipe" style="margin-top:8px">Delete all health entries</button>
@@ -794,7 +794,8 @@ function renderLog(){
   }).join('');
   const t = keyOf(todayNum());
   const todays = entries.filter(e => e.ts.startsWith(t));
-  $('#today-list').innerHTML = todays.length ? todays.map(entryCard).join('') : '<div class="empty">Nothing logged today yet.<br>Tap a category above to add an entry.</div>';
+  const haCard = !entries.length ? `<div class="card" style="margin-top:14px"><b>Already using Health Aware?</b><div class="sub" style="margin:4px 0 10px">Copy your existing health entries into Life Aware. Nothing is removed from Health Aware.</div><button class="btn primary block" data-importha>Import from Health Aware</button></div>` : '';
+  $('#today-list').innerHTML = haCard + (todays.length ? todays.map(entryCard).join('') : '<div class="empty">Nothing logged today yet.<br>Tap a category above to add an entry.</div>');
   const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
   const tip = $('#install-tip');
   tip.classList.toggle('hidden', standalone);
@@ -1470,24 +1471,27 @@ $('#btn-wipe-money').addEventListener('click', () => {
   if (!txns.length) return toast('Nothing to delete');
   if (confirm(`Delete all ${txns.length} money transactions from your account on every device? Your budget plan is kept.`) && confirm('Are you sure? This cannot be undone.')){ txns = []; saveEntries(); renderSettings(); toast('All transactions deleted'); }
 });
-$('#btn-import-ha').addEventListener('click', async () => {
-  const btn = $('#btn-import-ha'); btn.disabled = true; btn.textContent = 'Checking Health Aware…';
+// Copies entries from this account's Health Aware file (same sign-in, same Supabase project).
+// auto = offered once on first sign-in; stays quiet if there is nothing to import.
+async function importFromHealthAware(auto){
+  const btns = $$('[data-importha]'); btns.forEach(b => { b.disabled = true; b.dataset.label = b.textContent; b.textContent = 'Checking Health Aware…'; });
   try {
     const t = await freshToken();
     const r = await fetch(api(`/storage/v1/object/authenticated/${CFG.healthBucket || 'health-data'}/${session.user.id}/data.json`), {headers:{apikey:CFG.supabaseAnonKey, Authorization:'Bearer ' + t}, cache:'no-store'});
-    if (!r.ok) throw new Error(r.status === 404 || r.status === 400 ? 'No Health Aware data was found for this account.' : 'Could not read Health Aware data (' + r.status + ').');
+    if (!r.ok){ if (auto) return; throw new Error(r.status === 404 || r.status === 400 ? `No Health Aware data was found for ${session.user.email}. Make sure you use the same email in both apps, and that Health Aware shows “Synced”.` : 'Could not read Health Aware data (' + r.status + ').'); }
     const d = await r.json(), have = allIds();
     const add = (d.entries || []).filter(e => !have.has(e.id) && !deleted[e.id]);
-    if (!add.length) return alert(`All ${(d.entries || []).length} Health Aware entries are already in Life Aware.`);
-    if (!confirm(`Found ${(d.entries || []).length} Health Aware entries — ${add.length} are not in Life Aware yet.\n\nImport them now?`)) return;
+    if (!add.length){ if (!auto) alert(`All ${(d.entries || []).length} Health Aware entries are already in Life Aware.`); return; }
+    if (!confirm(`Found ${(d.entries || []).length} entries in Health Aware for ${session.user.email}${add.length < (d.entries || []).length ? ` — ${add.length} are not in Life Aware yet` : ''}.\n\nCopy them into Life Aware now? Nothing is removed from Health Aware.`)) return;
     entries = entries.concat(add);
     const hs = d.settings || {};
     for (const k of ['name', 'dob', 'provider', 'providerEmail', 'weightUnit', 'weightGoal']) if (!settings[k] && hs[k]) settings[k] = hs[k];
     for (const m of hs.meds || []) if (!settings.meds.some(x => x.name.toLowerCase() === m.name.toLowerCase())) settings.meds.push(m);
-    sortEntries(); saveEntries(); saveSettings(); renderSettings(); toast(`Imported ${add.length} health entries`, 3000);
-  } catch (err) { alert(err.message); }
-  finally { btn.disabled = false; btn.textContent = 'Import from Health Aware'; }
-});
+    sortEntries(); saveEntries(); saveSettings(); render(); toast(`Imported ${add.length} health entries`, 3000);
+  } catch (err) { if (!auto) alert(err.message); }
+  finally { $$('[data-importha]').forEach(b => { b.disabled = false; b.textContent = b.dataset.label || 'Import from Health Aware'; }); }
+}
+document.addEventListener('click', e => { if (e.target.closest('[data-importha]')) importFromHealthAware(false); });
 $('#btn-sample').addEventListener('click', () => {
   if (entries.concat(txns).some(e => e.sample)){ if (confirm('Remove the sample entries and transactions?')){ entries = entries.filter(e => !e.sample); txns = txns.filter(t => !t.sample); saveEntries(); renderSettings(); toast('Sample data removed'); } return; }
   if (entries.concat(txns).some(e => !e.sample) && !confirm('Add sample entries alongside your real data? Tap this button again later to remove them.')) return;
@@ -2033,6 +2037,8 @@ async function startUser(){
   loadUserData(); showApp();
   await syncNow();
   offerLegacyImport();
+  const askedKey = 'la.haAsked.' + session.user.id;
+  if (!entries.length && !load(askedKey, false)){ try { localStorage.setItem(askedKey, 'true'); } catch {} importFromHealthAware(true); }
 }
 function offerLegacyImport(){
   // Entries saved on this device before sign-in existed can be moved into the signed-in account once.

@@ -1526,17 +1526,25 @@ async function importFromHealthAware(auto){
   const btns = $$('[data-importha]'); btns.forEach(b => { b.disabled = true; b.dataset.label = b.textContent; b.textContent = 'Checking Health Aware…'; });
   try {
     const t = await freshToken();
-    const r = await fetch(api(`/storage/v1/object/authenticated/${CFG.healthBucket || 'health-data'}/${session.user.id}/data.json`), {headers:{apikey:CFG.supabaseAnonKey, Authorization:'Bearer ' + t}, cache:'no-store'});
+    const r = await fetch(api(`/storage/v1/object/authenticated/${CFG.healthBucket || 'health-data'}/${session.user.id}/data.json?t=${Date.now().toString(36)}`), {headers:{apikey:CFG.supabaseAnonKey, Authorization:'Bearer ' + t}, cache:'no-store'});
     if (!r.ok){ if (auto) return; throw new Error(r.status === 404 || r.status === 400 ? `No Health Aware data was found for ${session.user.email}. Make sure you use the same email in both apps, and that Health Aware shows “Synced”.` : 'Could not read Health Aware data (' + r.status + ').'); }
-    const d = await r.json(), have = allIds();
-    const add = (d.entries || []).filter(e => !have.has(e.id) && !deleted[e.id]);
-    if (!add.length){ if (!auto) alert(`All ${(d.entries || []).length} Health Aware entries are already in Life Aware.`); return; }
-    if (!confirm(`Found ${(d.entries || []).length} entries in Health Aware for ${session.user.email}${add.length < (d.entries || []).length ? ` — ${add.length} are not in Life Aware yet` : ''}.\n\nCopy them into Life Aware now? Nothing is removed from Health Aware.`)) return;
-    entries = entries.concat(add);
+    const d = await r.json(), mine = new Map(entries.map(e => [e.id, e]));
+    // New entries, plus ones edited in Health Aware after Life Aware's copy. Entries deleted in Life Aware stay deleted.
+    const add = (d.entries || []).filter(e => !mine.has(e.id) && !(deleted[e.id] && deleted[e.id] >= (e.updated || '')));
+    const upd = (d.entries || []).filter(e => mine.has(e.id) && (e.updated || '') > (mine.get(e.id).updated || ''));
+    const seenKey = 'la.haSeen.' + session.user.id, stamp = String(d.rev || d.updated || (d.entries || []).length);
+    if (!add.length && !upd.length){ try { localStorage.setItem(seenKey, JSON.stringify(stamp)); } catch {} if (!auto) alert(`All ${(d.entries || []).length} Health Aware entries are already in Life Aware.`); return; }
+    if (auto && load(seenKey, null) === stamp) return; // already asked about this exact Health Aware copy
+    try { localStorage.setItem(seenKey, JSON.stringify(stamp)); } catch {}
+    const what = [add.length && `${add.length} new`, upd.length && `${upd.length} updated`].filter(Boolean).join(' and ');
+    if (!confirm(`Health Aware has ${what} ${add.length + upd.length === 1 ? 'entry' : 'entries'} for ${session.user.email} that ${add.length + upd.length === 1 ? 'is' : 'are'} not in Life Aware yet.\n\nCopy into Life Aware now? Nothing is removed from Health Aware.`)) return;
+    const updIds = new Map(upd.map(e => [e.id, e]));
+    entries = entries.map(e => updIds.get(e.id) || e).concat(add);
+    for (const e of add) delete deleted[e.id];
     const hs = d.settings || {};
     for (const k of ['name', 'dob', 'provider', 'providerEmail', 'weightUnit', 'weightGoal']) if (!settings[k] && hs[k]) settings[k] = hs[k];
     for (const m of hs.meds || []) if (!settings.meds.some(x => x.name.toLowerCase() === m.name.toLowerCase())) settings.meds.push(m);
-    sortEntries(); saveEntries(); saveSettings(); render(); toast(`Imported ${add.length} health entries`, 3000);
+    sortEntries(); saveEntries(); saveSettings(); render(); toast(`Copied ${add.length + upd.length} health entries from Health Aware`, 3000);
   } catch (err) { if (!auto) alert(err.message); }
   finally { $$('[data-importha]').forEach(b => { b.disabled = false; b.textContent = b.dataset.label || 'Import from Health Aware'; }); }
 }
@@ -2086,8 +2094,8 @@ async function startUser(){
   loadUserData(); showApp();
   await syncNow();
   offerLegacyImport();
-  const askedKey = 'la.haAsked.' + session.user.id;
-  if (!entries.length && !load(askedKey, false)){ try { localStorage.setItem(askedKey, 'true'); } catch {} importFromHealthAware(true); }
+  // Health Aware is retired; pick up anything still saved there (quiet when there is nothing new).
+  importFromHealthAware(true);
 }
 function offerLegacyImport(){
   // Entries saved on this device before sign-in existed can be moved into the signed-in account once.
